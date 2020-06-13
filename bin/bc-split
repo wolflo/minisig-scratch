@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+
+### prints the bytecode size breakdown of every contract in $default_json_path
+### that is not in the lib/ dir
+
+# export SPLITTER_JSON_PATH to override default
+default_json_path="out/dapp.sol.json"
+
+function get_code() {
+    echo $(cat "${SPLITTER_JSON_PATH:-$default_json_path}" \
+        | jq -r '.contracts."'$1'"."'$2'"')
+}
+
+function print_sizes() {
+    local contracts=($(cat out/dapp.sol.json | jq --raw-output '.contracts|keys | @sh'))
+    for i in "${contracts[@]}"; do
+        contract="${i//\'/}"
+        [[ ${contract:0:4} == "lib/" ]] ||
+        (
+            local bytecode=$(get_code $contract bin)
+            local runtime=$(get_code $contract bin-runtime)
+            local constructor=${bytecode:0:-${#runtime}}
+            echo "$contract"
+            echo "-----------------"
+            echo "total size  : $((${#bytecode} / 2)) bytes"
+            echo "runtime     : $((${#runtime} / 2)) bytes"
+            echo -e "constructor : $((${#constructor} / 2)) bytes\n"
+        )
+    done
+}
+
+echo; print_sizes
