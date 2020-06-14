@@ -80,7 +80,6 @@ contract SmallSig {
         uint256 sigIdx;
         for (uint256 i = 0; i < threshold; i++) {
             // sig should be 65 bytes total, {32 byte r}{32 byte s}{1 byte v}
-            // TODO: fix this
             address addr = ecrecover(digest, uint8(_sigs[sigIdx + 65]), _sigs[sigIdx], _sigs[sigIdx + 32]);
             sigIdx += 65;
             require(signers[addr] == 1, "invalid-signer");

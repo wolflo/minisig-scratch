@@ -1,9 +1,10 @@
 pragma solidity 0.6.6;
 
-// huff reference version:
-// - change all bools to uint8
-// - change signers to an array
-// - remove Init event bc can get signers directly
+// The point of this contract is to provide an executable solidity reference
+// implementation that will approximate the huff implementation. The result
+// is exceptionally bad solidity, and this should not be used except for
+// comparison with huff impl. It will also not match the huff particularly
+// well, because the huff uses an approach that can't be built in solidity.
 contract MiniSig {
 
     enum CallType {
@@ -12,7 +13,7 @@ contract MiniSig {
     }
 
     uint256 public nonce;
-    mapping(address => uint256) public signers;
+    address[] public signers;
 
     uint8 public immutable threshold;
     bytes32 public immutable DOMAIN_SEPARATOR;
@@ -36,13 +37,15 @@ contract MiniSig {
             address(this)
         ));
 
-        threshold = _threshold;
+        address prevSigner = address(0);
         for (uint256 i = 0; i < _signers.length; i++) {
-            // instead of this check, huff version would require first sig != 0
-            // and sigs in ascending order, which makes execute check more efficient
-            require(_signers[i] != address(0), "invalid-signer-0");
-            signers[_signers[i]] = 1;
+            address signer = _signers[i];
+            require(signer > prevSigner, "invalid-signer-order");
+            prevSigner = signer;
         }
+
+        threshold = _threshold;
+        signers = _signers;
     }
 
     function execute(
@@ -72,10 +75,29 @@ contract MiniSig {
             ))
         ));
 
+        uint256 sigIdx = 0;
+        uint256 signerIdx;
         for (uint256 i = 0; i < threshold; i++) {
             // sig should be 65 bytes total, {32 byte r}{32 byte s}{1 byte v}
-            address addr = ecrecover(digest, uint8(_sigs[65]), _sigs[0], _sigs[32]);
-            require(signers[addr] == 1, "invalid-signer");
+            address addr = ecrecover(digest, uint8(_sigs[sigIdx + 65]), _sigs[sigIdx], _sigs[sigIdx + 32]);
+            sigIdx += 65;
+
+            // TODO lol
+            // for current signerIdx to end of signers, check each signer against
+            // recovered address.
+            // If we exhaust the list without a match, revert
+            // if we find a match, signerIdx = match index, continue looping through sigs
+            bool elem;
+            for (uint256 j = signerIdx; j < signers.length; j++) {
+                if (addr == signers[j]) {
+                    elem = true;
+                    signerIdx = j;
+                    // break
+                }
+            }
+            require(elem, "not-signer");
+            elem = false;
+
         }
 
         uint256 endNonce = initialNonce + 1;
