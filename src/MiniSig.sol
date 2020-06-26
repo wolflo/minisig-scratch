@@ -5,78 +5,90 @@ pragma solidity 0.6.6;
 // is exceptionally bad solidity, and this should not be used except for
 // comparison with huff impl. It will also not match the huff particularly
 // well, because the huff uses an approach that can't be built in solidity.
-// Note that instead of a nonce, each signature should include an expiration
-// block number when it becomes invalid. This allows the huff implementation
-// to maintain no state whatsoever.
 contract MiniSig {
 
+    // --- Data structures ---
     enum CallType {
         Call,
         DelegateCall
     }
 
-    address[] internal signers;         // approved signers
+    // --- State ---
+    uint256 public nonce;
+    address[] internal signers; // approved signers, immutable in huff impl.
+
+    // --- Immutables and constants ---
     uint8 public immutable threshold;   // minimum required signers
 
-    // --- EIP712 ---
+    // EIP712 stuff
     bytes32 public immutable DOMAIN_SEPARATOR;
     bytes32 internal constant DOMAIN_SEPARATOR_TYPEHASH = keccak256("EIP712Domain(uint256 chainId,uint256 deployBlock,address verifyingContract)");
-    bytes32 internal constant EXECUTE_TYPEHASH = keccak256("Execute(uint8 callType,address target,uint256 value,uint256 expiryBlock,bytes data)");
+    bytes32 internal constant EXECUTE_TYPEHASH = keccak256("Execute(uint8 callType,uint256 nonce,uint256 value,address target,bytes data)");
 
-    // recieve ether only if calldata is empty
-    receive () external payable {}
+    // --- Fallback function ---
+    receive () external payable {} // recieve ether only if calldata is empty
 
+    // --- Constructor ---
     constructor(uint8 _threshold, address[] memory _signers) public {
         require(_signers.length >= _threshold, "signers-invalid-length");
 
+        // set domain separator for EIP712 signatures
         uint256 chainId;
         assembly { chainId := chainid() }
         DOMAIN_SEPARATOR = keccak256(abi.encode(
             DOMAIN_SEPARATOR_TYPEHASH,
             chainId,
-            block.number,   // differentiates create2 deploys to same address
+            block.number,
             address(this)
         ));
 
-        address prevSigner = address(0);
+        // signers must be ascending order, and cannot be 0
+        address prevSigner;
         for (uint256 i = 0; i < _signers.length; i++) {
-            address signer = _signers[i];
-            require(signer > prevSigner, "invalid-signer-order");
-            prevSigner = signer;
+            require(signers[i] > prevSigner, "invalid-signer");
+            prevSigner = signers[i];
         }
 
+        // set threshold and valid signers
         threshold = _threshold;
         signers = _signers;
     }
 
     function execute(
         CallType _callType,
-        address _target,
+        uint256 _nonce,
         uint256 _value,
-        uint256 _expiryBlock,
+        address _target,
         bytes calldata _data,
         bytes calldata _sigs
     )
         external
         payable
     {
+        // must submit enough signatures to satisfy threshold
         // max(uint8) * 65 << max(uint256), so no overflow check
-        require(block.number < _expiryBlock, "invalid-block");
         require(_sigs.length >= uint256(threshold) * 65, "sigs-invalid-length");
 
+        // update nonce
+        require(_nonce == nonce, "invalid-nonce");
+        uint256 newNonce = nonce + 1;
+        nonce = newNonce;
+
+        // signed message hash
         bytes32 digest = keccak256(abi.encodePacked(
             "\x19\x01",
             DOMAIN_SEPARATOR,
             keccak256(abi.encode(
                 EXECUTE_TYPEHASH,
                 _callType,
-                _target,
+                _nonce,
                 _value,
-                _expiryBlock,
+                _target,
                 keccak256(_data)
             ))
         ));
 
+        // check signature validity
         // Note: a single invalid sig will cause a revert, even if there are
         // `>= threshold` valid sigs. But, an invalid sig after `threshold`
         // valid sigs is ignored
@@ -104,7 +116,7 @@ contract MiniSig {
             elem = false;
         }
 
-        // TODO: return data?
+        // make call dependent on callType
         bool success;
         if (_callType == CallType.Call) {
             (success,) = _target.call{value: _value}(_data);
@@ -114,9 +126,13 @@ contract MiniSig {
             // require(_value == 0 || _value == msg.value)
             (success,) = _target.delegatecall(_data);
         }
+
+        // check call succeeded and nonce unchanged
         require(success, "call-failure");
+        require(nonce == newNonce, "nonce-changed");
     }
 
+    // return signers array
     function allSigners() external view returns (address[] memory) {
         return signers;
     }
